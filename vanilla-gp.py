@@ -8,6 +8,7 @@ adapted to PyTorch, and with some changes.
 import os
 #os.environ["OMP_NUM_THREADS"] = "1"
 
+import sys
 import gym
 import torch
 import torch.nn as nn
@@ -81,7 +82,8 @@ class KarpathyPongPolicy(nn.Module):
 def collect_experience(env,
                        policy,
                        render,
-                       progress_bar):
+                       progress_bar,
+                       debug_limit):
     """Play a full episode, and collect experience, following `policy`.
 
     Args:
@@ -94,6 +96,7 @@ def collect_experience(env,
     memory = FastMemory()
     done = False
     episode_reward = 0
+    debug_step = 0  # Debug only: used for limiting the number of steps played
 
     # Run a full episode trajectory
     observation = env.reset()
@@ -123,6 +126,10 @@ def collect_experience(env,
         if reward != 0:
             # Game is done, but episode may still be in progress
             progress_bar(reward)
+        # Extra code used only in debugging PNG backward-graph diagrams
+        debug_step += 1
+        if debug_step == debug_limit:
+            break
     return memory, episode_reward
 
 
@@ -153,11 +160,6 @@ def compute_and_accumulate_policy_gradients(experience):
     policy_loss = (-batch_action_logp * discounted_epr).sum(dim=1).mean()
     #entropy_bonus = 0.1 * H
     #policy_loss -= (entropy_bonus + lt_entropy)
-    if False:
-        torchviz.make_dot(policy_loss,
-                          params=dict(policy.named_parameters())).render("pg_loss_backward",
-                                                                         format="png")
-        exit()
     policy_loss.backward()  # accumulate gradients
     return policy_loss, H, lt_entropy
 
@@ -206,10 +208,14 @@ argparser.add_argument('--profile', action='store_true',
                        help='enable when using python -m torch.utils.bottleneck')
 argparser.add_argument('--log-params', action='store_true',
                        help='log parameter histograms (warning: this requires large storage space)')
-argparser.add_argument('--num-actions', default=3, type=int, choices=(2, 3),
+argparser.add_argument('--num-actions', default=2, type=int, choices=(2, 3),
                         help='the number of actions in the action space')
 argparser.add_argument('--device', default=None, type=str,
                         help='the device to use (cpu, cuda, cuda:n)')
+
+argparser.add_argument('--debug-diagram-steps', default=None, type=int,
+                       help='use only to create diagrams of backward graphs')
+
 optimizer_grp = argparser.add_argument_group('Optimizer Arguments')
 optimizer_grp.add_argument('--rms-decay-rate', default=0.99, type=float,
                            help='decay factor for RMSProp leaky sum of grad^2 (default: 0.99)')
@@ -242,9 +248,16 @@ def vanilla_policy_gradient(args):
             experience, episode_reward = collect_experience(env,
                                                             policy,
                                                             args.render,
-                                                            progress_bar)
+                                                            progress_bar,
+                                                            args.debug_diagram_steps)
             episode_number += 1
             policy_loss, H, lt_entropy = compute_and_accumulate_policy_gradients(experience)
+            if args.debug_diagram_steps is not None:
+                # Draw the backward graph and exit
+                torchviz.make_dot(policy_loss,
+                                  params=dict(policy.named_parameters())).render("pg_loss_backward",
+                                                                                 format="png")
+                exit()
             reward_ema.update(episode_reward)
             writer.log_kvdict({'episode_reward': episode_reward,
                                'running_return': reward_ema.value,
