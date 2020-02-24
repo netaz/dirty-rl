@@ -124,37 +124,39 @@ Finally, in subgraph D, we compute the policy “loss”.
 policy_loss = (-batch_action_logp * discounted_epr).sum(dim=1).mean()
 ```
 
-Now let’s look at what happens when we have two steps.
-There is one very important nuance: while we are playing the game, collecting experience (i.e. rollout), we don’t have subgraph D yet, because that requires computing the discounted episode reward (i.e. the return), which hwe can only do after we are done rolling out the entire episode.
-
-That means that we are collecting a bunch of subgraphs.  That is a lot of memory, and a lot of compute.
-We then sample an action and use a `gather` operation to choose the specific log-probability of the action we chose.
-
-In subgraph C, we now need to choose a specific action to do the backprop on, so we mask the rest of the actions using a one-hot vector representing the action index.
-Finally, in subgraph D, we compute the policy “loss”. 
-```
-policy_loss = (-batch_action_logp * discounted_epr).sum(dim=1).mean()
-```
-
 Now let’s look at what happens when we have two steps:
 
 <div style="text-align: center;"> <img src="imgs/VPG-2-steps.png"></div>
 
-There is one very important nuance: while we are playing the game, collecting experience (i.e. rollout), 
+You can see that we have two subtrees, rooted by a shared root.  This "shared-root" is subgraph D, and the subtrees
+are the backprop of two separate game steps.  This is important: while we are playing the game, collecting experience (i.e. rollout), 
 we don’t have subgraph D yet, because that requires computing the discounted episode reward (i.e. the return), 
-which hwe can only do after we are done rolling out the entire episode.
+which we can only do after we are done rolling out the entire episode.
+ 
+**So what we have is a bunch of trees, all rooted at a `MulBackward` operation (subgraph C)**
 
-! So what we have is a bunch of trees, all rooted at a `MulBackward` operation !
+For me, seeing the graph below (backprop of 3 game steps) brought the VPG mechanism to life.  
 
-For me, seeing the graph below (3 game actions) brought the VPG mechanism to life.  When we stack masked 
-`action_logprob` tensors in our memory, we are actually stacking a bunch of backprop trees - 
-That is a lot of memory, and a lot of compute:
+<div style="text-align: center;"> <img src="imgs/VPG-3-steps.png"></div>
+
+When we stack masked 
+`action_logprob` tensors in our memory, we are actually stacking a bunch of backprop trees. 
 
     memory.append(action_mask * action_logprob,
                   torch.tensor(reward),
                   action_prob.)
+                  
+That is a lot of memory, and a lot of compute.  When you examine a graph of a batched input, such as
+ a batch of input images to an image-classification model, you see only one graph instance, because the 
+ intermediate activations and gradients are batched as well.  But here we see many separate subtrees, which
+ creates a lot of non-vectorized compute.
 
-<div style="text-align: center;"> <img src="imgs/VPG-3-steps.png"></div>
+Note: Torchviz seems to be limited in the number of graph nodes it can render (which makes sense), 
+and `torchviz_make_dot` will block if you pass in a very complex graph.
+
+### Vectorizing VPG backprop
+
+[Add here]
 
 ## All-zero gradients - what's that all about?
   - [Explain here how all-zero gradients can come to be]
